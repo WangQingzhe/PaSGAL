@@ -105,7 +105,7 @@ endif(BUILD_TESTS)
 
 ### Include protobuf
 # Ask user to set the following variable PROTOBUF_DIR 
-set(PROTOBUF_DIR CACHE STRING "absolute path to protobuf installation directory")
+set(PROTOBUF_DIR "/home/wqz/usr/local/protobuf" CACHE STRING "absolute path to protobuf installation directory")
 
 # The variables below are set based on PROTOBUF_DIR
 set(PROTOBUF_INCLUDE_DIR "${PROTOBUF_DIR}/include")
