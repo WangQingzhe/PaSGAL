@@ -33,9 +33,9 @@ IF(DEFINE_DEBUG_MACRO)
   ADD_DEFINITIONS(-DDEBUG)
 ENDIF(DEFINE_DEBUG_MACRO)
 
-# Assume avx512 availability by default
-SET(SIMD_SUPPORT avx512 CACHE STRING "Choose SIMD instrinsics, options are: avx512 avx2 none")
-SET_PROPERTY(CACHE SIMD_SUPPORT PROPERTY STRINGS avx512 avx2 none)
+# Assume neon128 availability by default
+SET(SIMD_SUPPORT neon128 CACHE STRING "Choose SIMD instrinsics, options are: avx512 avx2 neon128 none")
+SET_PROPERTY(CACHE SIMD_SUPPORT PROPERTY STRINGS avx512 avx2 neon128 none)
 
 #User expected to provide the SIMD option
 if (SIMD_SUPPORT STREQUAL avx2 OR SIMD_SUPPORT STREQUAL avx512)
@@ -69,9 +69,13 @@ if (SIMD_SUPPORT STREQUAL avx2 OR SIMD_SUPPORT STREQUAL avx512)
     message(STATUS "Enabling AVX2...")
   endif()
 
+elseif(SIMD_SUPPORT STREQUAL neon128)
+    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -march=native -DPASGAL_ENABLE_NEON128")
+    message(STATUS "Enabling NEON128...")
+  
 else()
 
-  message(STATUS "AVX option not provided, disabling SIMD support...")
+  message(STATUS "AVX/NEON option not provided, disabling SIMD support...")
 
 endif()
 
@@ -105,7 +109,7 @@ endif(BUILD_TESTS)
 
 ### Include protobuf
 # Ask user to set the following variable PROTOBUF_DIR 
-set(PROTOBUF_DIR "/home/wqz/usr/local/protobuf" CACHE STRING "absolute path to protobuf installation directory")
+set(PROTOBUF_DIR "/thfs1/home/penglin/wqz/usr/local/protobuf" CACHE STRING "absolute path to protobuf installation directory")
 
 # The variables below are set based on PROTOBUF_DIR
 set(PROTOBUF_INCLUDE_DIR "${PROTOBUF_DIR}/include")
@@ -153,4 +157,4 @@ endif(ENABLE_VTUNE)
 
 add_executable(PaSGAL "${PROJECT_SOURCE_DIR}/src/main.cpp")
 add_dependencies(PaSGAL LIBHTS SYMLNK)
-target_link_libraries(PaSGAL ${PROTOBUF_LIBRARY} LIBVGIO ${HTS_LIBRARY} ${VTUNE_LIBRARY} -lz -lpthread)
+target_link_libraries(PaSGAL LIBVGIO ${HTS_LIBRARY} ${VTUNE_LIBRARY} -lz -lpthread -lprotobuf -L/thfs1/home/penglin/wqz/usr/local/protobuf/lib)
