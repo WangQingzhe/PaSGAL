@@ -442,14 +442,17 @@ namespace psgl
         template <typename Vec>
         void alignToDAGLocal_Phase1_vectorized(Vec &bestScores, Vec &bestCols, Vec &bestRows) const
         {
+            // read的数量
             std::size_t readCount = readSet.size();
+            // Batch的数量 = ceil(read的数量 / numSeqs)
             std::size_t countReadBatches = std::ceil(readCount * 1.0 / SIMD::numSeqs);
 
-            // column location value requires int32_t type, so may need >1 register per read batch
+            // 每个register中能存储的的int32_t数量
             constexpr size_t colValuesPerRegister = SIMD_REG_SIZE / (8 * sizeof(int32_t));
+            // 每个batch中需要的colregister数量
             constexpr size_t colRegistersCountPerBatch = SIMD::numSeqs / colValuesPerRegister;
 
-            // few checks
+            // 检查bestScores, bestCols, bestRows的大小
             assert(bestScores.size() == countReadBatches);
             assert(bestCols.size() == countReadBatches * colRegistersCountPerBatch);
             assert(bestRows.size() == countReadBatches);
@@ -458,36 +461,47 @@ namespace psgl
             __itt_resume();
 #endif
 
-            // init best score vector to zero bits
+            // 初始化bestScores, bestCols, bestRows, 用0填充
             std::fill(bestScores.begin(), bestScores.end(), SIMD::zero());
             std::fill(bestCols.begin(), bestCols.end(), SIMD::zero());
             std::fill(bestRows.begin(), bestRows.end(), SIMD::zero());
 
-            // init score simd vectors
+            // 初始化评分参数的向量
             __mxxxi match512 = SIMD::set1((typename SIMD::type)parameters.match);
             __mxxxi mismatch512 = SIMD::set1((typename SIMD::type) - 1 * parameters.mismatch);
             __mxxxi del512 = SIMD::set1((typename SIMD::type) - 1 * parameters.del);
             __mxxxi ins512 = SIMD::set1((typename SIMD::type) - 1 * parameters.ins);
 
+            // 存储每个线程的用时
             std::vector<double> threadTimings(omp_get_max_threads(), 0);
 
-            // copy graph as function variable for faster access
+            // 复制graph和LongHop节点到函数变量，以便更快地访问
             const CSR_char_container graphLocal = this->graph;
             const std::vector<bool> withLongHopLocal = withLongHop;
 
 #pragma omp parallel
             {
 #pragma omp barrier
+                // 记录每个线程的开始时间
                 threadTimings[omp_get_thread_num()] = omp_get_wtime();
 
-                // type def. for memory-aligned vector allocation for SIMD instructions
+                // 定义数据类型，内存对齐的向量，元素为avx512/2的数据类型
                 using AlignedVecType = std::vector<__mxxxi, aligned_alloc<__mxxxi, 64>>;
 
-                // 2D buffer to save selected columns (associated with long hops) of DP matrix
+                // LoogHop节点的数量
                 std::size_t countLongHops = std::count(withLongHopLocal.begin(), withLongHopLocal.end(), true);
+                // 用于存储LongHop节点的buffer
                 AlignedVecType fartherColumnsBuffer(countLongHops * this->blockHeight);
+                // 用于存储U矩阵中LongHop节点的buffer
+                AlignedVecType UfartherColumnsBuffer(countLongHops * this->blockHeight);
+                // 用于存储V矩阵中LongHop节点的buffer
+                AlignedVecType VfartherColumnsBuffer(countLongHops * this->blockHeight);
 
-                // pointer array for convenient data access in 2D buffer
+                // 存储指向fatherColumnsBuffer的指针，方便2D buffer的访问
+                std::vector<__mxxxi *> fartherColumns(graphLocal.numVertices);
+                // 存储指向UfatherColumnsBuffer的指针，方便2D buffer的访问
+                std::vector<__mxxxi *> fartherColumns(graphLocal.numVertices);
+                // 存储指向VfatherColumnsBuffer的指针，方便2D buffer的访问
                 std::vector<__mxxxi *> fartherColumns(graphLocal.numVertices);
                 {
                     size_t j = 0;
@@ -497,97 +511,105 @@ namespace psgl
                             fartherColumns[i] = &fartherColumnsBuffer[(j++) * this->blockHeight];
                 }
 
-                // buffer to save neighboring column scores
+                // 用于存储分块内单元格的buffer
                 AlignedVecType nearbyColumnsBuffer(this->blockWidth * this->blockHeight);
 
-                // for convenient access to 2D buffer
+                // 指向nearbyColumnsBuffer的指针，方便2D buffer的访问
                 std::vector<__mxxxi *> nearbyColumns(this->blockWidth);
                 {
                     for (std::size_t i = 0; i < this->blockWidth; i++)
                         nearbyColumns[i] = &nearbyColumnsBuffer[i * this->blockHeight];
                 }
 
-                // buffer to save scores of last row in each iteration
-                // one row for writing and one for reading
+                // 存储上一行和当前行的buffer
+                // 一行用于读取，一行用于写入
                 AlignedVecType lastBatchRowBuffer(2 * graphLocal.numVertices);
 
-                // for convenient access to 2D buffer
+                // 指向lastBatchRowBuffer的指针，方便2D buffer访问
                 std::vector<__mxxxi *> lastBatchRow(2);
                 {
                     lastBatchRow[0] = &lastBatchRowBuffer[0];
                     lastBatchRow[1] = &lastBatchRowBuffer[graphLocal.numVertices];
                 }
 
-                // buffer to save read charactes for innermost loop
+                // 用于保存block内用到的read字符的buffer
                 std::vector<typename SIMD::type, aligned_alloc<typename SIMD::type, 64>> readCharsInt(SIMD::numSeqs * this->blockHeight);
 
-                // process SIMD::numSeqs reads in a single iteration
+                // 在一个循环内处理整个batch的read
 #pragma omp for schedule(dynamic) nowait
                 for (size_t i = 0; i < countReadBatches; i++)
                 {
+                    // 初始化bestScores512, bestRows512, bestCols512
+                    // 用于保存一个batch的所有矩阵的最佳分数及其位置
                     __mxxxi bestScores512 = SIMD::zero();
                     __mxxxi bestRows512 = SIMD::zero();
 
-                    // we may need at most 4 registers to save column for each batch (depending on SIMD::type)
+                    // 用于保存每个batch的所有矩阵的最佳列位置，最多需要4个
                     __mxxxi bestCols512_0 = SIMD::zero();
                     __mxxxi bestCols512_1 = SIMD::zero();
                     __mxxxi bestCols512_2 = SIMD::zero();
                     __mxxxi bestCols512_3 = SIMD::zero();
 
-                    // reset DP 'lastBatchRow' buffer
+                    // 初始化lastBatchRowBuffer
                     std::fill(lastBatchRowBuffer.begin(), lastBatchRowBuffer.end(), SIMD::zero());
 
-                    int32_t qryBatchLength = readSet[sortedReadOrder[i * SIMD::numSeqs]].length();      // longest read in this batch
-                    qryBatchLength += this->blockHeight - 1 - (qryBatchLength - 1) % this->blockHeight; // round-up
+                    // 该batch内最长read的长度
+                    int32_t qryBatchLength = readSet[sortedReadOrder[i * SIMD::numSeqs]].length();
+                    // 使得qryBatchLength是blockHeight的倍数
+                    qryBatchLength += this->blockHeight - 1 - (qryBatchLength - 1) % this->blockHeight;
 
-                    // iterate over read length (process more than 1 characters in batch)
+                    // 遍历read的字符,每次处理blockHeight个字符
                     for (int32_t j = 0; j < qryBatchLength; j += this->blockHeight)
                     {
-                        // loop counter
+                        // 循环次数（第几个block）
                         size_t loopJ = j / (this->blockHeight);
 
-                        // convert read character to int32_t
+                        // 将第i批第j个block的read字符加载到readCharsInt中
                         for (int32_t k = 0; k < SIMD::numSeqs * this->blockHeight; k++)
                         {
                             readCharsInt[k] = readSetSOA[readSetSOAPrefixSum[i] + j * SIMD::numSeqs + k];
                         }
 
-                        // iterate over characters in reference graph
+                        // 遍历参考图中的每个节点
                         for (int32_t k = 0; k < graphLocal.numVertices; k++)
                         {
-                            // current reference character
+                            // 当前图节点的字符
                             __mxxxi graphChar = SIMD::set1((typename SIMD::type)graphLocal.vertex_label[k]);
 
-                            // current best score, init to 0
+                            // 当前单元格得分的最大值
                             __mxxxi currentMax512;
 
-                            // iterate over 'blockHeight' read characters
+                            // 遍历blockHeight个read中的字符
                             for (size_t l = 0; l < this->blockHeight; l++)
                             {
-                                // load read characters
+                                // 加载当前read中的字符
                                 __mxxxi readChars = SIMD::load((const __mxxxi *)&readCharsInt[l * SIMD::numSeqs]);
 
-                                // current best score, init to 0
+                                // 当前单元格的得分最大值，初始化为0
                                 currentMax512 = SIMD::zero();
 
-                                // see if query and reference character match
+                                // 比较当前read字符和图节点字符是否相等
+                                // Δij
                                 auto compareChar = SIMD::cmpeq(readChars, graphChar);
                                 __mxxxi sub512 = SIMD::blend(compareChar, mismatch512, match512);
 
-                                // match-mismatch edit
-                                currentMax512 = SIMD::max(currentMax512, sub512); // local alignment can also start with a match at this char
+                                // 更新当前单元格的最大值
+                                // local模式可以从当前单元格重新开始比对
+                                currentMax512 = SIMD::max(currentMax512, sub512);
 
-                                // iterate over graph neighbors
-                                // which buffers to access depends on the value of 'l'
+                                // 遍历当前图节点的邻接节点
+                                // 访问哪个buffer取决于当前的l
                                 if (l == 0)
                                 {
+                                    // 遍历当前图结点k的入边m
                                     for (size_t m = graphLocal.offsets_in[k]; m < graphLocal.offsets_in[k + 1]; m++)
                                     {
-                                        // paths with match mismatch edit
+                                        // 访问lastBatchRowBuffer,获取上一行的值
+                                        // C[i-1][k] + Δij
                                         __mxxxi substEdit = SIMD::add(lastBatchRow[(loopJ - 1) & 1][graphLocal.adjcny_in[m]], sub512);
                                         currentMax512 = SIMD::max(currentMax512, substEdit);
 
-                                        // paths with deletion edit
+                                        // C[i][k] + Δdel
                                         __mxxxi delEdit;
 
                                         if (k - graphLocal.adjcny_in[m] < this->blockWidth)
@@ -598,7 +620,7 @@ namespace psgl
                                         currentMax512 = SIMD::max(currentMax512, delEdit);
                                     }
 
-                                    // insertion edit
+                                    // C[i-1][j] + Δins
                                     __mxxxi insEdit = SIMD::add(lastBatchRow[(loopJ - 1) & 1][k], ins512);
                                     currentMax512 = SIMD::max(currentMax512, insEdit);
                                 }
@@ -606,10 +628,10 @@ namespace psgl
                                 {
                                     for (size_t m = graphLocal.offsets_in[k]; m < graphLocal.offsets_in[k + 1]; m++)
                                     {
-                                        // paths with match mismatch edit
+                                        // C[i-1][k] + Δij
                                         __mxxxi substEdit;
 
-                                        // paths with deletion edit
+                                        // C[i][k] + Δdel
                                         __mxxxi delEdit;
 
                                         if (k - graphLocal.adjcny_in[m] < this->blockWidth)
@@ -627,39 +649,39 @@ namespace psgl
                                         currentMax512 = SIMD::max(currentMax512, delEdit);
                                     }
 
-                                    // insertion edit
+                                    // C[i][j] + Δins
                                     __mxxxi insEdit = SIMD::add(nearbyColumns[k & (blockWidth - 1)][l - 1], ins512);
                                     currentMax512 = SIMD::max(currentMax512, insEdit);
                                 }
 
-                                // update best score observed yet
+                                // 更新目前计算的所有单元格的最大值
                                 bestScores512 = SIMD::max(currentMax512, bestScores512);
 
-                                // on which lanes is the best score updated
+                                // 哪个通道的最佳得分更新了
                                 auto updated = SIMD::cmpeq(currentMax512, bestScores512);
 
-                                // update row and column values accordingly
+                                // 按通道更新最佳行和列
                                 bestRows512 = SIMD::mask_set1(bestRows512, updated, (typename SIMD::type)(j + l));
                                 SIMD::update_cols(bestCols512_0, bestCols512_1, bestCols512_2, bestCols512_3, (int32_t)k, updated);
 
-                                // save current score in small buffer
+                                // 把当前单元格得分保存到nearbyColumnsbuffer中
                                 nearbyColumns[k & (blockWidth - 1)][l] = currentMax512;
 
-                                // save current score in large buffer if connected thru long hop
+                                // 若当前图节点是longHop节点，将当前单元格得分也保存到fartherColumnsbuffer中
                                 if (withLongHopLocal[k])
                                     fartherColumns[k][l] = currentMax512;
                             }
 
-                            // save last score for next row-wise iteration
+                            // 把当前block最后一行的值保存到lastBatchRowBuffer中
                             lastBatchRow[loopJ & 1][k] = currentMax512;
 
-                        } // end of row computation
-                    }     // end of DP
+                        } // 行计算结束
+                    }     // DP矩阵计算结束
 
                     bestScores[i] = bestScores512;
                     bestRows[i] = bestRows512;
                     {
-                        // storing best columns requires extra work
+                        // 存储最佳列位置，需要额外的工作
                         if (colRegistersCountPerBatch == 1)
                         {
                             bestCols[1 * i + 0] = bestCols512_0;
@@ -678,11 +700,12 @@ namespace psgl
                         }
                     }
 
-                } // all reads done
+                } // 所有read比对完成
 
+                // 记录每个线程的结束时间
                 threadTimings[omp_get_thread_num()] = omp_get_wtime() - threadTimings[omp_get_thread_num()];
 
-            } // end of omp parallel
+            } // omp parallel结束
 
             std::cout << "TIMER, psgl::alignToDAGLocal_Phase1_vectorized"
                       << " (precision= " << sizeof(typename SIMD::type) << " bytes)"
