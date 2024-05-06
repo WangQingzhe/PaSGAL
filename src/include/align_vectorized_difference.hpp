@@ -48,6 +48,7 @@ namespace psgl
         static constexpr int numSeqs = SIMD_REG_SIZE / (8 * sizeof(type));
         typedef __mmask16 mmask_t;
         static inline __mxxxi add(const __mxxxi &a, const __mxxxi &b) { return _mm512_add_epi32(a, b); }
+        static inline __mxxxi sub(const __mxxxi &a, const __mxxxi &b) { return _mm512_sub_epi32(a, b); }
         static inline __mxxxi set1(int32_t a) { return _mm512_set1_epi32(a); }
         static inline __mxxxi set1_32(int32_t a) { return _mm512_set1_epi32(a); }
         static inline __mxxxi max(const __mxxxi &a, const __mxxxi &b) { return _mm512_max_epi32(a, b); }
@@ -65,6 +66,7 @@ namespace psgl
 #elif defined(PASGAL_ENABLE_AVX2)
         static constexpr int numSeqs = SIMD_REG_SIZE / (8 * sizeof(type));
         static inline __mxxxi add(const __mxxxi &a, const __mxxxi &b) { return _mm256_add_epi32(a, b); }
+        static inline __mxxxi sub(const __mxxxi &a, const __mxxxi &b) { return _mm256_sub_epi32(a, b); }
         static inline __mxxxi set1(int32_t a) { return _mm256_set1_epi32(a); }
         static inline __mxxxi set1_32(int32_t a) { return _mm256_set1_epi32(a); }
         static inline __mxxxi max(const __mxxxi &a, const __mxxxi &b) { return _mm256_max_epi32(a, b); }
@@ -91,6 +93,7 @@ namespace psgl
         typedef __mmask32 mmask_t;
         typedef SimdInst<int32_t>::mmask_t mmask_T; // for 32-bit integer operations
         static inline __mxxxi add(const __mxxxi &a, const __mxxxi &b) { return _mm512_add_epi16(a, b); }
+        static inline __mxxxi sub(const __mxxxi &a, const __mxxxi &b) { return _mm512_sub_epi16(a, b); }
         static inline __mxxxi set1(int16_t a) { return _mm512_set1_epi16(a); }
         static inline __mxxxi set1_32(int32_t a) { return _mm512_set1_epi32(a); }
         static inline __mxxxi max(const __mxxxi &a, const __mxxxi &b) { return _mm512_max_epi16(a, b); }
@@ -115,6 +118,7 @@ namespace psgl
 #elif defined(PASGAL_ENABLE_AVX2)
         static constexpr int numSeqs = SIMD_REG_SIZE / (8 * sizeof(type));
         static inline __mxxxi add(const __mxxxi &a, const __mxxxi &b) { return _mm256_add_epi16(a, b); }
+        static inline __mxxxi sub(const __mxxxi &a, const __mxxxi &b) { return _mm256_sub_epi16(a, b); }
         static inline __mxxxi set1(int16_t a) { return _mm256_set1_epi16(a); }
         static inline __mxxxi set1_32(int32_t a) { return _mm256_set1_epi32(a); }
         static inline __mxxxi max(const __mxxxi &a, const __mxxxi &b) { return _mm256_max_epi16(a, b); }
@@ -148,6 +152,7 @@ namespace psgl
         typedef __mmask64 mmask_t;
         typedef SimdInst<int32_t>::mmask_t mmask_T; // for 32-bit integer operations
         static inline __mxxxi add(const __mxxxi &a, const __mxxxi &b) { return _mm512_add_epi8(a, b); }
+        static inline __mxxxi sub(const __mxxxi &a, const __mxxxi &b) { return _mm512_sub_epi8(a, b); }
         static inline __mxxxi set1(int8_t a) { return _mm512_set1_epi8(a); }
         static inline __mxxxi set1_32(int32_t a) { return _mm512_set1_epi32(a); }
         static inline __mxxxi max(const __mxxxi &a, const __mxxxi &b) { return _mm512_max_epi8(a, b); }
@@ -174,6 +179,7 @@ namespace psgl
 #elif defined(PASGAL_ENABLE_AVX2)
         static constexpr int numSeqs = SIMD_REG_SIZE / (8 * sizeof(type));
         static inline __mxxxi add(const __mxxxi &a, const __mxxxi &b) { return _mm256_add_epi8(a, b); }
+        static inline __mxxxi sub(const __mxxxi &a, const __mxxxi &b) { return _mm256_sub_epi8(a, b); }
         static inline __mxxxi set1(int8_t a) { return _mm256_set1_epi8(a); }
         static inline __mxxxi set1_32(int32_t a) { return _mm256_set1_epi32(a); }
         static inline __mxxxi max(const __mxxxi &a, const __mxxxi &b) { return _mm256_max_epi8(a, b); }
@@ -490,7 +496,7 @@ namespace psgl
 
                 // LoogHop节点的数量
                 std::size_t countLongHops = std::count(withLongHopLocal.begin(), withLongHopLocal.end(), true);
-                // 用于存储LongHop节点的buffer
+                // 用于存储H矩阵中LongHop节点的buffer
                 AlignedVecType fartherColumnsBuffer(countLongHops * this->blockHeight);
                 // 用于存储U矩阵中LongHop节点的buffer
                 AlignedVecType UfartherColumnsBuffer(countLongHops * this->blockHeight);
@@ -500,9 +506,9 @@ namespace psgl
                 // 存储指向fatherColumnsBuffer的指针，方便2D buffer的访问
                 std::vector<__mxxxi *> fartherColumns(graphLocal.numVertices);
                 // 存储指向UfatherColumnsBuffer的指针，方便2D buffer的访问
-                std::vector<__mxxxi *> fartherColumns(graphLocal.numVertices);
+                std::vector<__mxxxi *> UfartherColumns(graphLocal.numVertices);
                 // 存储指向VfatherColumnsBuffer的指针，方便2D buffer的访问
-                std::vector<__mxxxi *> fartherColumns(graphLocal.numVertices);
+                std::vector<__mxxxi *> VfartherColumns(graphLocal.numVertices);
                 {
                     size_t j = 0;
 
@@ -511,11 +517,19 @@ namespace psgl
                             fartherColumns[i] = &fartherColumnsBuffer[(j++) * this->blockHeight];
                 }
 
-                // 用于存储分块内单元格的buffer
+                // 用于存储H矩阵分块内单元格的buffer
                 AlignedVecType nearbyColumnsBuffer(this->blockWidth * this->blockHeight);
+                // 用于存储U矩阵分块内单元格的buffer
+                AlignedVecType UnearbyColumnsBuffer(this->blockWidth * this->blockHeight);
+                // 用于存储V矩阵分块内单元格的buffer
+                AlignedVecType VnearbyColumnsBuffer(this->blockWidth * this->blockHeight);
 
                 // 指向nearbyColumnsBuffer的指针，方便2D buffer的访问
                 std::vector<__mxxxi *> nearbyColumns(this->blockWidth);
+                // 指向UnearbyColumnsBuffer的指针，方便2D buffer的访问
+                std::vector<__mxxxi *> UnearbyColumns(this->blockWidth);
+                // 指向VnearbyColumnsBuffer的指针，方便2D buffer的访问
+                std::vector<__mxxxi *> VnearbyColumns(this->blockWidth);
                 {
                     for (std::size_t i = 0; i < this->blockWidth; i++)
                         nearbyColumns[i] = &nearbyColumnsBuffer[i * this->blockHeight];
@@ -524,9 +538,15 @@ namespace psgl
                 // 存储上一行和当前行的buffer
                 // 一行用于读取，一行用于写入
                 AlignedVecType lastBatchRowBuffer(2 * graphLocal.numVertices);
+                AlignedVecType UlastBatchRowBuffer(2 * graphLocal.numVertices);
+                AlignedVecType VlastBatchRowBuffer(2 * graphLocal.numVertices);
 
                 // 指向lastBatchRowBuffer的指针，方便2D buffer访问
                 std::vector<__mxxxi *> lastBatchRow(2);
+                // 指向UlastBatchRowBuffer的指针，方便2D buffer访问
+                std::vector<__mxxxi *> UlastBatchRow(2);
+                // 指向VlastBatchRowBuffer的指针，方便2D buffer访问
+                std::vector<__mxxxi *> VlastBatchRow(2);
                 {
                     lastBatchRow[0] = &lastBatchRowBuffer[0];
                     lastBatchRow[1] = &lastBatchRowBuffer[graphLocal.numVertices];
@@ -599,59 +619,193 @@ namespace psgl
 
                                 // 遍历当前图节点的邻接节点
                                 // 访问哪个buffer取决于当前的l
-                                if (l == 0)
+                                // case1:第1个block的第1行(整个矩阵的第1行),只计算v矩阵
+                                if (l == 0 && loopJ == 0)
                                 {
-                                    // 遍历当前图结点k的入边m
+                                    // 遍历前驱节点m,计算Hi,j
                                     for (size_t m = graphLocal.offsets_in[k]; m < graphLocal.offsets_in[k + 1]; m++)
                                     {
-                                        // 访问lastBatchRowBuffer,获取上一行的值
-                                        // C[i-1][k] + Δij
-                                        __mxxxi substEdit = SIMD::add(lastBatchRow[(loopJ - 1) & 1][graphLocal.adjcny_in[m]], sub512);
-                                        currentMax512 = SIMD::max(currentMax512, substEdit);
-
-                                        // C[i][k] + Δdel
-                                        __mxxxi delEdit;
-
-                                        if (k - graphLocal.adjcny_in[m] < this->blockWidth)
-                                            delEdit = SIMD::add(nearbyColumns[graphLocal.adjcny_in[m] & (blockWidth - 1)][l], del512);
+                                        // Hi,k - Δins
+                                        __mxxxi insEdit;
+                                        if (graphLocal.adjcny_in[m] - k < this->blockWidth)
+                                            insEdit = SIMD::add(nearbyColumns[graphLocal.adjcny_in[m] & (blockWidth - 1)][l], ins512);
                                         else
-                                            delEdit = SIMD::add(fartherColumns[graphLocal.adjcny_in[m]][l], del512);
-
-                                        currentMax512 = SIMD::max(currentMax512, delEdit);
+                                            insEdit = SIMD::add(fartherColumns[graphLocal.adjcny_in[m]][l], ins512);
+                                        // 更新当前单元格的最大值
+                                        currentMax512 = SIMD::max(currentMax512, insEdit);
                                     }
+                                    // 遍历前驱节点m,计算V(k)i,j
+                                    for (size_t m = graphLocal.offsets_in[k]; m < graphLocal.offsets_in[k + 1]; m++)
+                                    {
+                                        // V(k)i,j = Hi,j - Hi,k
+                                        __mxxxi currentV;
+                                        if (graphLocal.adjcny_in[m] - k < this->blockWidth)
+                                            currentV = SIMD::sub(currentMax512, nearbyColumns[graphLocal.adjcny_in[m] & (blockWidth - 1)][l]);
+                                        else
+                                            currentV = SIMD::add(fartherColumns[graphLocal.adjcny_in[m]][l], ins512);
 
-                                    // C[i-1][j] + Δins
-                                    __mxxxi insEdit = SIMD::add(lastBatchRow[(loopJ - 1) & 1][k], ins512);
-                                    currentMax512 = SIMD::max(currentMax512, insEdit);
+                                        // 把当前的V保存到VnearbyColumnsbuffer中
+                                        VnearbyColumns[k & (blockWidth - 1)][l][graphLocal.adjcny_in[m]] = currentV;
+                                        // 若当前图节点是longHop节点，将当前的V也保存到VfartherColumnsbuffer中
+                                        if (withLongHopLocal[k])
+                                            VfartherColumns[k][l][graphLocal.adjcny_in[m]] = currentV;
+                                    }
                                 }
+
+                                // case2:其余block的第1行,需要上个block的最后一行
+                                else if (l == 0)
+                                {
+                                    // 若没有前驱节点,直接计算Hi,j和ui,j
+                                    if (graphLocal.offsets_in[k] >= graphLocal.offsets_in[k + 1])
+                                    {
+                                        // Hi,j = Hi-1,j - Δdel
+                                        __mxxxi delEdit = SIMD::add(lastBatchRow[(loopJ - 1) & 1][k], del512);
+                                        // 更新当前单元格的最大值
+                                        currentMax512 = SIMD::max(currentMax512, delEdit);
+                                        // ui,j = Hi,j - Hi-1,j
+                                        __mxxxi currentU = SIMD::sub(currentMax512, lastBatchRow[(loopJ - 1) & 1][k]);
+                                        // 把当前的U保存到UnearbyColumnsbuffer中
+                                        UnearbyColumns[k & (blockWidth - 1)][l] = currentU;
+                                        // 若当前图节点是longHop节点，将当前的U也保存到UfartherColumnsbuffer中
+                                        if (withLongHopLocal[k])
+                                            UfartherColumns[k][l] = currentU;
+                                    }
+                                    // 记录u是否被计算过
+                                    bool uCalculated = false;
+                                    // 若有前驱节点,遍历当前图结点k的入边m
+                                    for (size_t m = graphLocal.offsets_in[k]; m < graphLocal.offsets_in[k + 1]; m++)
+                                    {
+                                        // currentZ = 0/Δi,j - Hi-1,k
+                                        __mxxxi currentZ = SIMD::zero();
+                                        currentZ = SIMD::max(currentZ, sub512);
+                                        currentZ = SIMD::sub(currentZ, lastBatchRow[(loopJ - 1) & 1][graphLocal.adjcny_in[m]]);
+
+                                        // 遍历当前图结点k的前驱节点mm
+                                        for (size_t mm = graphLocal.offsets_in[k]; mm < graphLocal.offsets_in[k + 1]; mm++)
+                                        {
+                                            // V(k)i-1,j - V(k')i-1,j
+                                            __mxxxi VsubEdit = SIMD::sub(VlastBatchRow[(loopJ - 1) & 1][k][graphLocal.adjcny_in[m]], VlastBatchRow[(loopJ - 1) & 1][k][graphLocal.adjcny_in[mm]]);
+
+                                            // subStEdit = V(k)i-1,j - V(k')i-1,j + Δij
+                                            __mxxxi substEdit = SIMD::add(VsubEdit, sub512);
+
+                                            // insEdit = Ui,k' + V(k)i-1,j - V(k')i-1,j - Δins
+                                            __mxxxi insEdit;
+                                            if (graphLocal.adjcny_in[mm] - k < this->blockWidth)
+                                                insEdit = SIMD::add(UnearbyColumns[graphLocal.adjcny_in[mm] & (blockWidth - 1)][l], VsubEdit);
+                                            else
+                                                insEdit = SIMD::add(UfartherColumns[graphLocal.adjcny_in[mm]][l], VsubEdit);
+                                            insEdit = SIMD::add(insEdit, ins512);
+
+                                            // 更新当前单元格的最大值
+                                            currentZ = SIMD::max(currentZ, substEdit);
+                                            currentZ = SIMD::max(currentZ, insEdit);
+                                        }
+
+                                        // delEdit = V(k)i-1,j - Δdel
+                                        __mxxxi delEdit = SIMD::add(VlastBatchRow[(loopJ - 1) & 1][k][graphLocal.adjcny_in[m]], del512);
+                                        // 更新当前单元格最大值
+                                        currentZ = SIMD::max(currentZ, delEdit);
+
+                                        // V(k)i,j = Z(k)i,j - Ui,k
+                                        __mxxxi currentV = SIMD::sub(currentZ, UnearbyColumns[k & (blockWidth - 1)][l]);
+                                        // 把当前的V保存到VnearbyColumnsbuffer中
+                                        VnearbyColumns[k & (blockWidth - 1)][l][graphLocal.adjcny_in[m]] = currentV;
+                                        // 若当前图节点是longHop节点，将当前的V也保存到VfartherColumnsbuffer中
+                                        if (withLongHopLocal[k])
+                                            VfartherColumns[k][l][graphLocal.adjcny_in[m]] = currentV;
+
+                                        // 若U没有被计算过
+                                        if (uCalculated == false)
+                                        {
+                                            // Ui,j = Z(k)i,j - V(k)i-1,j
+                                            __mxxxi currentU = SIMD::sub(currentZ, VlastBatchRow[(loopJ - 1) & 1][k][graphLocal.adjcny_in[m]]);
+                                            // 把当前的U保存到UnearbyColumnsbuffer中
+                                            UnearbyColumns[k & (blockWidth - 1)][l] = currentU;
+                                            // 若当前图节点是longHop节点，将当前的U也保存到UfartherColumnsbuffer中
+                                            if (withLongHopLocal[k])
+                                                UfartherColumns[k][l] = currentU;
+                                            uCalculated = true;
+                                        }
+                                    }
+                                }
+
+                                // case3:所有block的其余行,仅需当前block的数据
                                 else
                                 {
+                                    // 若没有前驱节点,直接计算Hi,j和Ui,j
+                                    if (graphLocal.offsets_in[k] >= graphLocal.offsets_in[k + 1])
+                                    {
+                                        // Hi,j = Hi-1,j - Δdel
+                                        __mxxxi delEdit = SIMD::add(nearbyColumns[k & (blockWidth - 1)][l - 1], del512);
+                                        // 更新当前单元格的最大值
+                                        currentMax512 = SIMD::max(currentMax512, delEdit);
+                                        // ui,j = Hi,j - Hi-1,j
+                                        __mxxxi currentU = SIMD::sub(currentMax512, nearbyColumns[k & (blockWidth - 1)][l - 1]);
+                                        // 把当前的U保存到UnearbyColumnsbuffer中
+                                        UnearbyColumns[k & (blockWidth - 1)][l] = currentU;
+                                        // 若当前图节点是longHop节点，将当前的U也保存到UfartherColumnsbuffer中
+                                        if (withLongHopLocal[k])
+                                            UfartherColumns[k][l] = currentU;
+                                    }
+                                    // 记录u是否被计算过
+                                    bool uCalculated = false;
+                                    // 若有前驱节点,遍历当前图结点k的入边m
                                     for (size_t m = graphLocal.offsets_in[k]; m < graphLocal.offsets_in[k + 1]; m++)
                                     {
-                                        // C[i-1][k] + Δij
-                                        __mxxxi substEdit;
+                                        // currentZ = 0/Δi,j - Hi-1,k
+                                        __mxxxi currentZ = SIMD::zero();
+                                        currentZ = SIMD::max(currentZ, sub512);
+                                        currentZ = SIMD::sub(currentZ, nearbyColumns[graphLocal.adjcny_in[m] & (blockWidth - 1)][l - 1]);
 
-                                        // C[i][k] + Δdel
-                                        __mxxxi delEdit;
-
-                                        if (k - graphLocal.adjcny_in[m] < this->blockWidth)
+                                        // 遍历当前图结点k的前驱节点mm
+                                        for (size_t mm = graphLocal.offsets_in[k]; mm < graphLocal.offsets_in[k + 1]; mm++)
                                         {
-                                            substEdit = SIMD::add(nearbyColumns[graphLocal.adjcny_in[m] & (blockWidth - 1)][l - 1], sub512);
-                                            delEdit = SIMD::add(nearbyColumns[graphLocal.adjcny_in[m] & (blockWidth - 1)][l], del512);
-                                        }
-                                        else
-                                        {
-                                            substEdit = SIMD::add(fartherColumns[graphLocal.adjcny_in[m]][l - 1], sub512);
-                                            delEdit = SIMD::add(fartherColumns[graphLocal.adjcny_in[m]][l], del512);
+                                            // V(k)i-1,j - V(k')i-1,j
+                                            __mxxxi VsubEdit = SIMD::sub(VnearbyColumns[k & (blockWidth - 1)][l - 1][graphLocal.adjcny_in[m]], VnearbyColumns[k & (blockWidth - 1)][l - 1][graphLocal.adjcny_in[mm]]);
+
+                                            // subStEdit = V(k)i-1,j - V(k')i-1,j + Δij
+                                            __mxxxi substEdit = SIMD::add(VsubEdit, sub512);
+
+                                            // insEdit = Ui,k' + V(k)i-1,j - V(k')i-1,j - Δins
+                                            __mxxxi insEdit;
+                                            if (graphLocal.adjcny_in[mm] - k < this->blockWidth)
+                                                insEdit = SIMD::add(UnearbyColumns[graphLocal.adjcny_in[mm] & (blockWidth - 1)][l], VsubEdit);
+                                            else
+                                                insEdit = SIMD::add(UfartherColumns[graphLocal.adjcny_in[mm]][l], VsubEdit);
+                                            insEdit = SIMD::add(insEdit, ins512);
+
+                                            // 更新当前单元格的最大值
+                                            currentZ = SIMD::max(currentZ, substEdit);
+                                            currentZ = SIMD::max(currentZ, insEdit);
                                         }
 
-                                        currentMax512 = SIMD::max(currentMax512, substEdit);
-                                        currentMax512 = SIMD::max(currentMax512, delEdit);
+                                        // delEdit = V(k)i-1,j - Δdel
+                                        __mxxxi delEdit = SIMD::add(VnearbyColumns[k & (blockWidth - 1)][l - 1][graphLocal.adjcny_in[m]], del512);
+                                        // 更新当前单元格最大值
+                                        currentZ = SIMD::max(currentZ, delEdit);
+
+                                        // V(k)i,j = Z(k)i,j - Ui,k
+                                        __mxxxi currentV = SIMD::sub(currentZ, UnearbyColumns[k & (blockWidth - 1)][l]);
+                                        // 把当前的V保存到VnearbyColumnsbuffer中
+                                        VnearbyColumns[k & (blockWidth - 1)][l][graphLocal.adjcny_in[m]] = currentV;
+                                        // 若当前图节点是longHop节点，将当前的V也保存到VfartherColumnsbuffer中
+                                        if (withLongHopLocal[k])
+                                            VfartherColumns[k][l][graphLocal.adjcny_in[m]] = currentV;
+
+                                        // 若U没有被计算过
+                                        if (uCalculated == false)
+                                        {
+                                            // Ui,j = Z(k)i,j - V(k)i-1,j
+                                            __mxxxi currentU = SIMD::sub(currentZ, VnearbyColumns[k & (blockWidth - 1)][l - 1][graphLocal.adjcny_in[m]]);
+                                            // 把当前的U保存到UnearbyColumnsbuffer中
+                                            UnearbyColumns[k & (blockWidth - 1)][l] = currentU;
+                                            // 若当前图节点是longHop节点，将当前的U也保存到UfartherColumnsbuffer中
+                                            if (withLongHopLocal[k])
+                                                UfartherColumns[k][l] = currentU;
+                                            uCalculated = true;
+                                        }
                                     }
-
-                                    // C[i][j] + Δins
-                                    __mxxxi insEdit = SIMD::add(nearbyColumns[k & (blockWidth - 1)][l - 1], ins512);
-                                    currentMax512 = SIMD::max(currentMax512, insEdit);
                                 }
 
                                 // 更新目前计算的所有单元格的最大值
